@@ -216,6 +216,20 @@ class ManagementTests(unittest.TestCase):
         n=len(self.up.writes); self.assertEqual(self.apply(p)['status'],'applied');self.assertEqual(len(self.up.writes),n)
         self.assertTrue(all('if-unmodified-since-version' in x['headers'] for x in self.up.writes))
 
+    def test_status_distinguishes_server_tools_from_granted_oauth_write_scope(self):
+        read = self.rpc('zotero_status', {}, self.readtoken)
+        self.assertEqual(read.status_code, 200)
+        value = read.json()['result']['structuredContent']
+        self.assertTrue(value['capabilities']['writes_enabled'])
+        self.assertEqual(value['capabilities']['server_advertised_tools'], 17)
+        self.assertEqual(value['capabilities']['server_advertised_write_tools'], 6)
+        self.assertFalse(value['capabilities']['write_scope_granted_to_client'])
+        self.assertNotIn(self.readtoken, read.text)
+        write = self.rpc('zotero_status', {}, self.token)
+        self.assertEqual(write.status_code, 200)
+        self.assertTrue(write.json()['result']['structuredContent']['capabilities']['write_scope_granted_to_client'])
+        self.assertNotIn(self.token, write.text)
+
     def test_old_read_token_cannot_prepare_or_apply_writes(self):
         r=self.rpc('plan_changes',{'actions':[{'action':'trash_items','item_keys':[A]}]},self.readtoken)
         self.assertEqual(r.status_code,403,r.text)
