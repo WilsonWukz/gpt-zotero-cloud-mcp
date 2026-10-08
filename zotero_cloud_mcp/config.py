@@ -24,6 +24,7 @@ class Settings:
     enable_content_reads: bool = False
     allow_permanent_delete: bool = False
     state_db: str = ""
+    database_url: str = field(default="", repr=False)
     extra_redirects: tuple[str, ...] = ()
     local_dev: bool = False
 
@@ -46,6 +47,7 @@ class Settings:
             enable_content_reads=os.getenv("ZOTERO_ENABLE_CONTENT_READS", "false").strip().lower() == "true",
             allow_permanent_delete=os.getenv("ZOTERO_ALLOW_PERMANENT_DELETE", "false").strip().lower() == "true",
             state_db=os.getenv("ZOTERO_STATE_DB", ""),
+            database_url=os.getenv("ZOTERO_DATABASE_URL", ""),
             extra_redirects=tuple(redirects),
             local_dev=os.getenv("LOCAL_DEV", "false").lower() == "true",
         )

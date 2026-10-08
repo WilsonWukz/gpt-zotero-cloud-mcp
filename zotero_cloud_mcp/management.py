@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 
 import httpx
 from .change_store import ChangeStore, canonical
+from .pg_change_store import PostgresChangeStore
 from .management_schema import validate
 from .zotero import DataError, KEY, ORIGIN, normalize_doi, normalize_title
 
@@ -39,7 +40,8 @@ class LibraryManager:
     def __init__(self, settings, zotero, auth):
         self.s, self.z, self.auth = settings, zotero, auth
         self.http = zotero.http
-        self.store = ChangeStore(settings.state_db) if settings.enable_writes else None
+        self.store = (PostgresChangeStore(settings.database_url, allow_insecure_local=settings.local_dev)
+                      if settings.database_url else ChangeStore(settings.state_db)) if settings.enable_writes else None
         self.lock = asyncio.Lock()
         self.templates = {}
 

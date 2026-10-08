@@ -10,6 +10,20 @@ jobs:
     strategy:
       matrix:
         python: ['3.12', '3.13']
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: zotero_test
+          POSTGRES_PASSWORD: synthetic-ci-password
+          POSTGRES_DB: zotero_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U zotero_test -d zotero_test"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
@@ -17,3 +31,5 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: pip install -r requirements.txt
       - run: python -m unittest discover -s tests -v
+        env:
+          ZOTERO_TEST_POSTGRES_URL: postgresql://zotero_test:synthetic-ci-password@127.0.0.1:5432/zotero_test?sslmode=disable

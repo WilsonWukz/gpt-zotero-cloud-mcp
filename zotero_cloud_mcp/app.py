@@ -207,7 +207,8 @@ def create_app(settings=None, transport=None):
                             capabilities={"version": VERSION, "writes_implemented": True,
                                 "writes_enabled": s.enable_writes,
                                 "content_reads_enabled": s.enable_content_reads or s.enable_writes,
-                                "permanent_delete_enabled": s.enable_writes and s.allow_permanent_delete})
+                                "permanent_delete_enabled": s.enable_writes and s.allow_permanent_delete,
+                                "persistence_backend": ("postgresql" if s.database_url else "sqlite") if s.enable_writes else "disabled"})
                 result = {"content": [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}], "structuredContent": payload, "isError": False}
             except DataError as exc:
                 result = {"content": [{"type": "text", "text": json.dumps(exc.result())}], "structuredContent": exc.result(), "isError": True}
