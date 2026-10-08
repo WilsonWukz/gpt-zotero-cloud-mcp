@@ -1,31 +1,45 @@
-# Security model and reporting
+# Security model — v0.2 reviewed library management
 
-**Experimental personal-use gateway, not independently audited.** One owner and one process per deployment. Do not host unrelated users on one instance. Before offering a shared service, replace the gateway with a reviewed identity provider and durable tenant-isolated credential/session storage.
+Experimental, single-owner/single-process gateway. Not independently audited, not a multi-tenant identity provider. Source publication never authorizes public access to private libraries. No real credentials or library fixtures may be committed.
 
-## Enforced boundaries
+## Capability and authorization boundaries
 
-All MCP operations require authorization before tool discovery or execution. The model cannot choose account IDs, keys, hosts or arbitrary API paths. Upstream traffic uses only GET to `https://api.zotero.org`; redirects and environment proxies are disabled. Write-privileged keys are **rejected by default**. A self-hosting owner may explicitly set `ZOTERO_ALLOW_WRITE_KEY=true` to permit such an upstream key for **read-only gateway operations**; this flag cannot enable POST/PUT/PATCH/DELETE to Zotero or create any MCP write tool. Only a configured collection subtree is returned; unrelated collection names, notes and attachments are not returned. Public pages do not display the configured collection name.
+Default settings expose only legacy read tools. Extended reads require `ZOTERO_ENABLE_CONTENT_READS` or write mode. `ZOTERO_ALLOW_WRITE_KEY` is solely key compatibility. Actual writes separately require `ZOTERO_ENABLE_WRITES`, a private `ZOTERO_STATE_DB`, live target-library write permission, and a `zotero:write` OAuth claim. Read tokens cannot be escalated through a tool argument or refresh request. Disabling write mode makes write-scoped tokens unusable and removes write tools.
 
-The server temporarily reads collection metadata to resolve the permitted subtree. Zotero key permissions may still grant whole-library access: compromise of the upstream key bypasses our application-level subtree restriction. Use a dedicated, least-privileged key and keep it private. **Risk of opt-in:** if a write-capable upstream key leaks, a third party can bypass this gateway and use Zotero's API to modify/delete data, even though the gateway itself is read-only. This is why `ZOTERO_ALLOW_WRITE_KEY` defaults to false. A compromise of the host/environment could expose the stored secret.
+The model cannot select an account, API key, host, arbitrary path or HTTP method. The legacy reader is GET-only. The management transport is fixed to `api.zotero.org`; its write routes are versioned batch item/collection POSTs and DELETEs. Redirects and environment proxies are disabled. Input contracts and Zotero templates reject structural-field smuggling. Keys and passwords never enter tool output.
 
-## OAuth
+Scope is one configured collection subtree. Children are authorized through their actual parent chain. Metadata changes preserve unrelated memberships but affect the shared Zotero record globally; previews flag that. Destructive actions on items also filed outside the subtree are refused. The configured root is protected; collection moves reject cycles; deletion is restricted to empty leaves. Removing the last in-scope item membership is blocked. Permanent item deletion requires a separate flag, prior trashing and no children.
 
-Authorization code with mandatory S256 PKCE, exact registered redirects, explicit owner consent, per-request browser cookie binding, bounded request/state storage, issuer/audience/scope/purpose/expiry checks. No upstream key is placed in a token. DCR registration metadata is signed and survives ephemeral-host restarts.
+A compromised upstream key bypasses all application-level scope restrictions. A write-capable key has a larger blast radius. Do not confuse the gateway's limited operations with limitations on a stolen key.
 
-Access: 8 hours. Confidential-client refresh: 7-day **absolute** lifetime, requiring the registered client's secret. No public-client refresh tokens. Confidential refresh tokens are not rotated and there is no per-token revocation database; these are explicit personal-use limitations. Rotate `MCP_LOGIN_PASSWORD` to revoke all access/refresh tokens. Changing data credentials or scope also revokes them. Rotate `APP_SECRET` to revoke registrations too.
+## Two-stage writes and replay resistance
 
-Pending sign-ins expire after 10 minutes; codes expire after 2 minutes and are consumed once. Expired state is pruned on OAuth requests. A signed, 10-minute browser-bound consent proof can recover pending authorization after a worker restart. Consent replay is blocked only within the active worker; across restarts a still-valid consent proof can be submitted again only with its browser cookie and the owner passphrase. Already-issued authorization codes remain in memory and are invalidated by a restart; redeemed codes cannot be replayed across restarts. This is an experimental single-owner tradeoff, not a durable distributed OAuth state store. **Do not increase worker/process count.** Global in-memory rate limits reset on restart and are not distributed abuse protection. Provider-level limits are recommended.
+Planning performs reads and stores a digest-bound immutable preview; it does not mutate Zotero. Plans are bound to the OAuth client and credential epoch. The owner review URL reveals only a login form to an anonymous visitor. Viewing/approving requires the instance passphrase, a signed expiring browser cookie/CSRF proof, same-origin POST, and the exact plan digest. All preview text is HTML-escaped, with scripts/frames disallowed. A model-visible `confirmed` flag is not accepted as approval.
 
-## Secrets, data and logs
+After browser approval, `apply_changes` atomically claims the plan in SQLite **before** any upstream write. Completed calls return the stored result instead of writing twice. Library and object version preconditions prevent overwriting concurrent changes. Every batch response is verified per object. Batches are not transactions: partial failures stop subsequent steps; a merge transfers children/updates primary before trashing duplicates.
 
-Use distinct cryptographically random signing/passphrase values, each at least 32 characters. Length is not entropy. Never reuse an account password. Put secrets only in the host's private environment or secret manager, never source, test fixtures, public issues, URLs or model-visible parameters.
+Network timeouts/invalid success responses are recorded as uncertain, not retried. A crash can leave a plan applying. Neither state automatically resumes, even after a process restart. Store loss requires manual upstream reconciliation. Deterministic per-plan creation keys and version preconditions add protection but do not replace retained receipts or permit blind resubmission with a new plan.
 
-Application access logging is disabled; HTTP debug logging is suppressed. Upstream error bodies are not returned. The hosting provider may retain infrastructure/request logs under its own policy. Do not enable debug logging on a live instance.
+Undo prepares a new reviewed plan, checks current object versions, and refuses irreversible, partial/uncertain or subsequently modified data. It is not a universal rollback system. Merge is conservative, not a native desktop transaction; it does not rewrite inbound references across the whole library or deduplicate binary attachments.
 
-No telemetry SDK or persistent library database. Scoped metadata is cached in process and cleared after 45 seconds. Requested metadata/abstracts enter the requesting AI client's conversation and follow that client's retention policy. Library text is untrusted data and may contain prompt injection; never treat it as instructions or enable unrelated tools because of it.
+## Private storage and retention
 
-HTTP request bodies, OAuth state, response bytes, snapshot size and timeouts are bounded. This does not eliminate denial-of-service risk. Full dependency locking, external protocol interoperability tests, and an independent security review remain public production-release gates.
+`ZOTERO_STATE_DB` is an independent SQLite file, never the desktop Zotero database. Its parent must be owned by the service user with mode 0700; file mode is 0600 and symlink traversal is rejected. It stores private diffs, previous metadata and receipts, not API secrets. It is excluded by `.gitignore`; backups require the same access controls. Retention is seven days, except unresolved applying/uncertain records. Capacity and plan size are bounded. It is not an encrypted database and filesystem/host compromise is outside these application guarantees.
 
-## Reporting and exposure response
+Use persistent private storage for operational history. A free/ephemeral Render filesystem is not a durability guarantee. `:memory:` is test-only in deployment practice. This source change does not provision or authorize a paid disk/service. Stored-plan digests are rechecked before use. Access logging remains disabled and upstream failure bodies are not reflected.
 
-Before public release, enable GitHub private vulnerability reporting or publish a real private security contact. Do not invent a contact address or post exploit details/credentials in public issues. Revoke an exposed Zotero key immediately, rotate gateway secrets, and inspect Git history and provider logs. Removing a file from the latest commit is not credential revocation.
+## OAuth and browser policy
+
+S256 PKCE, exact registered callbacks, purpose/issuer/audience/expiry checks and explicit scope consent remain enforced. Old read credentials do not gain write scope. Access tokens expire in eight hours. Confidential refresh tokens have a fixed seven-day lifetime without rotation; public clients receive no refresh token. Rotate the instance passphrase to revoke access/refresh tokens; rotate the signing secret to revoke registrations. Changing the upstream key or collection scope changes the credential epoch.
+
+Authorization consent can recover from a worker restart via a signed, browser-bound proof. OAuth codes remain in process memory and expire in two minutes. Consent replay memory does not survive worker restarts; valid recovered consent still requires its cookie/passphrase and unchanged epoch. Rate limits are process-local, not distributed abuse protection. These limits are why the project is not presented as a production multi-user OAuth provider.
+
+The authorization document narrowly permits the configured ChatGPT callback origin in its CSP. Review forms stay same-origin, carry same-origin referrer policy, and never automatically redirect private data to a third party.
+
+## Content, tests and reporting
+
+Notes, annotations, abstracts and synced full-text indexes are untrusted data, never instructions. Explicit content-reading tools may send such text into the requesting AI conversation; the client's retention policy applies. Binary PDF transfer, OCR and publisher downloads are not included. A partial index cannot establish a complete document.
+
+Tests exercise a mutable synthetic Zotero service and real application routes, including browser-review CSRF/password checks, write scopes, concurrency, replay, batch failures, merge and undo. They do not establish that a live user library was modified or that all browsers/MCP clients have been certified. Before broader deployment, run a separately authorized sandbox-library acceptance test, dependency review and independent security audit.
+
+Report privately through the repository's configured vulnerability-reporting channel, not public issues containing credentials. Revoke exposed upstream keys immediately and rotate gateway secrets. Deleting a committed secret from the latest tree does not revoke it. Review complete Git history before a public release.

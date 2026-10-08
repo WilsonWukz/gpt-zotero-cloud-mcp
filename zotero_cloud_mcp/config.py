@@ -4,8 +4,9 @@ import json
 import os
 from urllib.parse import urlsplit
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 SCOPE = "zotero:read"
+WRITE_SCOPE = "zotero:write"
 
 @dataclass(frozen=True)
 class Settings:
@@ -19,6 +20,10 @@ class Settings:
     library_id: str = ""
     # Explicit operator opt-in; never adds write tools or non-GET upstream calls.
     allow_write_key: bool = False
+    enable_writes: bool = False
+    enable_content_reads: bool = False
+    allow_permanent_delete: bool = False
+    state_db: str = ""
     extra_redirects: tuple[str, ...] = ()
     local_dev: bool = False
 
@@ -37,6 +42,10 @@ class Settings:
             library_type=os.getenv("ZOTERO_LIBRARY_TYPE", "user"),
             library_id=os.getenv("ZOTERO_LIBRARY_ID", ""),
             allow_write_key=os.getenv("ZOTERO_ALLOW_WRITE_KEY", "false").strip().lower() == "true",
+            enable_writes=os.getenv("ZOTERO_ENABLE_WRITES", "false").strip().lower() == "true",
+            enable_content_reads=os.getenv("ZOTERO_ENABLE_CONTENT_READS", "false").strip().lower() == "true",
+            allow_permanent_delete=os.getenv("ZOTERO_ALLOW_PERMANENT_DELETE", "false").strip().lower() == "true",
+            state_db=os.getenv("ZOTERO_STATE_DB", ""),
             extra_redirects=tuple(redirects),
             local_dev=os.getenv("LOCAL_DEV", "false").lower() == "true",
         )

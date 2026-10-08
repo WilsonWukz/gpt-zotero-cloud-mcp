@@ -16,7 +16,7 @@ from urllib.parse import parse_qs, unquote_plus, urlencode, urlsplit
 
 import jwt
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse
-from .config import Settings, SCOPE
+from .config import Settings, SCOPE, WRITE_SCOPE
 
 CALLBACK = re.compile(r"https://chatgpt\.com/connector/oauth/[A-Za-z0-9_-]+\Z")
 LEGACY_CALLBACK = "https://chatgpt.com/connector_platform_oauth_redirect"
@@ -64,6 +64,18 @@ class Auth:
         epoch_data = json.dumps([settings.login_password, settings.zotero_key, settings.collection_name,
                                  settings.collection_key, settings.library_type, settings.library_id])
         self.epoch = hmac.new(settings.app_secret.encode(), epoch_data.encode(), hashlib.sha256).hexdigest()
+
+    @property
+    def supported_scopes(self):
+        return [SCOPE, WRITE_SCOPE] if self.s.enable_writes else [SCOPE]
+
+    def checked_scope(self, value):
+        if not isinstance(value, str):
+            raise OAuthError("invalid_scope", "Scope must be a string")
+        scopes = set(value.split())
+        if not scopes or not scopes <= set(self.supported_scopes):
+            raise OAuthError("invalid_scope", "Requested scopes are not enabled")
+        return " ".join(x for x in self.supported_scopes if x in scopes)
 
     def cookie_name(self, request_id):
         # Every OAuth approval page gets its own host-only cookie, so opening a
@@ -130,12 +142,12 @@ class Auth:
             "registration_endpoint": b + "/oauth/register", "response_types_supported": ["code"],
             "grant_types_supported": ["authorization_code", "refresh_token"],
             "token_endpoint_auth_methods_supported": ["client_secret_basic", "client_secret_post", "none"],
-            "code_challenge_methods_supported": ["S256"], "scopes_supported": [SCOPE],
+            "code_challenge_methods_supported": ["S256"], "scopes_supported": self.supported_scopes,
             "authorization_response_iss_parameter_supported": True})
 
     async def resource_metadata(self, request):
         return JSONResponse({"resource": self.s.resource, "authorization_servers": [self.s.base_url],
-            "scopes_supported": [SCOPE], "bearer_methods_supported": ["header"], "resource_name": "Zotero Cloud MCP"})
+            "scopes_supported": self.supported_scopes, "bearer_methods_supported": ["header"], "resource_name": "Zotero Cloud MCP"})
 
     async def register(self, request):
         self.require_ready()
@@ -156,7 +168,7 @@ class Auth:
         cid = self.sign("client", meta)
         if len(cid) > 6000:
             raise OAuthError("invalid_client_metadata", "Client metadata too large")
-        result = {**meta, "client_id": cid, "client_id_issued_at": int(time.time()), "scope": SCOPE,
+        result = {**meta, "client_id": cid, "client_id_issued_at": int(time.time()), "scope": " ".join(self.supported_scopes),
                   "grant_types": ["authorization_code"] + ([] if method == "none" else ["refresh_token"]), "response_types": ["code"]}
         result.pop("nonce")
         if method != "none":
@@ -186,14 +198,14 @@ class Auth:
             redirect = proof["redirect_uri"]
             challenge = proof["challenge"]
             state = proof["state"]
-            if (proof.get("rid") != rid or not isinstance(redirect, str)
+            if (proof.get("epoch") != self.epoch or proof.get("rid") != rid or not isinstance(redirect, str)
                     or redirect not in c["redirect_uris"] or not self.check_redirect(redirect)
                     or not isinstance(challenge, str) or not CHALLENGE.fullmatch(challenge)
                     or not isinstance(state, str) or len(state) > 2048):
                 raise ValueError("Consent claim invalid")
             return {"client_id": cid, "redirect_uri": redirect, "state": state,
                     "challenge": challenge, "cookie_hash": proof["cookie_hash"],
-                    "expires": proof["exp"]}
+                    "scope": self.checked_scope(proof.get("scope", SCOPE)), "expires": proof["exp"]}
         except (OAuthError, KeyError, TypeError, ValueError):
             raise OAuthError("access_denied", "authorization_proof_invalid_or_expired", 403) from None
 
@@ -212,25 +224,29 @@ class Auth:
             raise OAuthError("invalid_request", "Authorization code and S256 PKCE are required")
         if q.get("resource") != self.s.resource:
             raise OAuthError("invalid_target", "Resource must match this MCP endpoint")
-        if set(q.get("scope", SCOPE).split()) != {SCOPE}:
-            raise OAuthError("invalid_scope", "Only zotero:read is available")
+        scope = self.checked_scope(q.get("scope", SCOPE))
         state = q.get("state", "")
         if len(state) > 2048:
             raise OAuthError("invalid_request", "State too long")
         rid, cookie = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
         self.pending[rid] = {"client_id": cid, "redirect_uri": redirect, "state": state, "challenge": q["code_challenge"],
-                             "cookie_hash": digest(cookie), "expires": time.time() + 600}
-        consent = self.sign("consent", {"rid": rid, **self.pending[rid]}, 600)
+                             "cookie_hash": digest(cookie), "scope": scope, "expires": time.time() + 600}
+        consent = self.sign("consent", {"rid": rid, **self.pending[rid], "epoch": self.epoch}, 600)
         name = html.escape(c["client_name"])
         collection = "the operator-configured collection / 已配置文献分类"
+        write = WRITE_SCOPE in scope.split()
+        access_label = "读取及受控写入 / read and reviewed write access" if write else "只读访问 / read-only access"
+        notice = ("写入可修改、归类、合并或删除文献；每份计划仍需在独立复核页批准后才能执行。 "
+                  "Writes may edit, file, merge, or delete records; each exact plan requires a separate owner approval."
+                  if write else "不会修改或删除文献。No library writes.")
         body = f'''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Zotero Cloud MCP — Authorize</title></head>
 <body style="font-family:system-ui;max-width:600px;margin:64px auto;padding:24px;line-height:1.7"><h1>Zotero Cloud MCP</h1>
-<p>授权 / Authorize <strong>{name}</strong> 只读访问 / read-only access to <strong>{collection}</strong> 及其子分类 / and descendants.</p>
-<p>不会修改或删除文献。请求的数据将进入你发起的 AI 对话。No library writes; requested metadata is sent to your AI client.</p>
+<p>授权 / Authorize <strong>{name}</strong> {access_label} to <strong>{collection}</strong> 及其子分类 / and descendants.</p>
+<p>{notice} 请求的数据将进入你发起的 AI 对话。Requested data is sent to your AI client.</p>
 <form action="/oauth/approve" method="post"><input type="hidden" name="request_id" value="{rid}"><input type="hidden" name="consent_token" value="{consent}"><label for="password">插件专用口令 / Instance passphrase</label><br>
 <input id="password" name="password" type="password" autocomplete="current-password" required maxlength="512" style="width:100%;padding:10px;box-sizing:border-box">
 <p>输入 Render 的 MCP_LOGIN_PASSWORD。不是 Google / Zotero 密码，也不是 Zotero API Key。</p>
-<button name="decision" value="allow">确认只读授权 / Approve</button> <button name="decision" value="deny" formnovalidate>取消 / Cancel</button></form>
+<button name="decision" value="allow">确认授权 / Approve</button> <button name="decision" value="deny" formnovalidate>取消 / Cancel</button></form>
 <p><small>Return only to {html.escape(redirect)}</small></p></body></html>'''
         response = HTMLResponse(body)
         response.set_cookie(self.cookie_name(rid), cookie, max_age=600, secure=not self.s.local_dev, httponly=True, samesite="lax", path="/")
@@ -301,9 +317,9 @@ class Auth:
             raise OAuthError("invalid_client", "Invalid client credential", 401)
         return cid, c
 
-    def issue_tokens(self, cid, client, refresh=True):
-        claims = {"sub": "owner", "client_id": cid, "scope": SCOPE, "epoch": self.epoch, "jti": secrets.token_urlsafe(20)}
-        result = {"access_token": self.sign("access", claims, ACCESS_SECONDS), "token_type": "Bearer", "expires_in": ACCESS_SECONDS, "scope": SCOPE}
+    def issue_tokens(self, cid, client, refresh=True, scope=SCOPE):
+        claims = {"sub": "owner", "client_id": cid, "scope": self.checked_scope(scope), "epoch": self.epoch, "jti": secrets.token_urlsafe(20)}
+        result = {"access_token": self.sign("access", claims, ACCESS_SECONDS), "token_type": "Bearer", "expires_in": ACCESS_SECONDS, "scope": claims["scope"]}
         # Public clients have no refresh token without a durable rotation store.
         if refresh and client["token_endpoint_auth_method"] != "none":
             result["refresh_token"] = self.sign("refresh", claims, REFRESH_SECONDS)
@@ -324,26 +340,33 @@ class Auth:
             if not p or p["client_id"] != cid or p["redirect_uri"] != data.get("redirect_uri") or not VERIFIER.fullmatch(verifier) or not hmac.compare_digest(challenge, p["challenge"]):
                 raise OAuthError("invalid_grant", "Invalid, expired or mismatched code")
             self.codes.pop(key)  # Atomic in one event loop: no await before consume.
-            return JSONResponse(self.issue_tokens(cid, c))
+            return JSONResponse(self.issue_tokens(cid, c, scope=p.get("scope", SCOPE)))
         if data.get("grant_type") == "refresh_token" and c["token_endpoint_auth_method"] != "none":
             try:
                 p = self.decode(data.get("refresh_token", ""), "refresh")
             except OAuthError:
                 raise OAuthError("invalid_grant", "Invalid refresh token") from None
-            if p.get("client_id") != cid or p.get("epoch") != self.epoch or p.get("scope") != SCOPE or data.get("scope", SCOPE) != SCOPE:
+            scope = self.checked_scope(data.get("scope", p.get("scope", "")))
+            if p.get("client_id") != cid or p.get("epoch") != self.epoch or not set(scope.split()) <= set(p.get("scope", "").split()):
                 raise OAuthError("invalid_grant", "Refresh token mismatch")
-            result = self.issue_tokens(cid, c, refresh=False)
+            result = self.issue_tokens(cid, c, refresh=False, scope=scope)
             result["refresh_token"] = data["refresh_token"]  # Fixed original expiry, never sliding.
             return JSONResponse(result)
         raise OAuthError("unsupported_grant_type", "Unsupported grant")
 
-    def verify_request(self, request):
+    def verify_request(self, request, required_scope=None):
         self.require_ready()
         header = request.headers.get("authorization", "")
         if not header.startswith("Bearer ") or len(header) > 16384:
             raise OAuthError("invalid_token", "OAuth authorization required", 401)
         p = self.decode(header[7:], "access")
-        if p.get("scope") != SCOPE or p.get("sub") != "owner" or p.get("epoch") != self.epoch:
+        try:
+            scope = self.checked_scope(p.get("scope", ""))
+        except OAuthError:
+            raise OAuthError("invalid_token", "Token scopes are no longer enabled", 401) from None
+        if p.get("sub") != "owner" or p.get("epoch") != self.epoch:
             raise OAuthError("invalid_token", "Token is not authorized for this resource", 401)
+        if required_scope and required_scope not in scope.split():
+            raise OAuthError("insufficient_scope", "Reauthorize with the required scope: " + required_scope, 403)
         self.client(p.get("client_id"))
         return p
