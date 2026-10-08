@@ -56,6 +56,9 @@ class Auth:
     def __init__(self, settings: Settings):
         self.s = settings
         self.pending, self.codes, self.limits = {}, {}, {}
+        # Deny reuse of a submitted consent within the running worker.
+        # Signed consent forms survive worker restarts; this replay cache does not.
+        self.used_consents = {}
         self.cookie_prefix = "zotero-mcp-dev-login" if settings.local_dev else "__Host-zotero-mcp-login"
         # Changing the data scope or any secret revokes access/refresh tokens.
         epoch_data = json.dumps([settings.login_password, settings.zotero_key, settings.collection_name,
@@ -164,8 +167,35 @@ class Auth:
         now = time.time()
         self.pending = {k: v for k, v in self.pending.items() if v["expires"] > now}
         self.codes = {k: v for k, v in self.codes.items() if v["expires"] > now}
-        if len(self.pending) + len(self.codes) >= 512:
+        self.used_consents = {k: v for k, v in self.used_consents.items() if v > now}
+        if len(self.pending) + len(self.codes) + len(self.used_consents) >= 512:
             raise OAuthError("temporarily_unavailable", "Too many pending sign-ins", 429)
+
+    def recover_consent(self, rid, consent_token):
+        # The signed, short-lived record is carried in the authorization form.
+        # It allows the browser to finish after a Render worker restart without
+        # accepting client-provided redirects, PKCE challenges or OAuth state.
+        if not consent_token:
+            raise OAuthError("access_denied", "authorization_state_expired_or_restarted", 403)
+        if not isinstance(consent_token, str) or len(consent_token) > 12000:
+            raise OAuthError("access_denied", "authorization_proof_invalid_or_expired", 403)
+        try:
+            proof = self.decode(consent_token, "consent")
+            cid = proof["client_id"]
+            c = self.client(cid)
+            redirect = proof["redirect_uri"]
+            challenge = proof["challenge"]
+            state = proof["state"]
+            if (proof.get("rid") != rid or not isinstance(redirect, str)
+                    or redirect not in c["redirect_uris"] or not self.check_redirect(redirect)
+                    or not isinstance(challenge, str) or not CHALLENGE.fullmatch(challenge)
+                    or not isinstance(state, str) or len(state) > 2048):
+                raise ValueError("Consent claim invalid")
+            return {"client_id": cid, "redirect_uri": redirect, "state": state,
+                    "challenge": challenge, "cookie_hash": proof["cookie_hash"],
+                    "expires": proof["exp"]}
+        except (OAuthError, KeyError, TypeError, ValueError):
+            raise OAuthError("access_denied", "authorization_proof_invalid_or_expired", 403) from None
 
     async def authorize(self, request):
         self.require_ready()
@@ -190,13 +220,14 @@ class Auth:
         rid, cookie = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
         self.pending[rid] = {"client_id": cid, "redirect_uri": redirect, "state": state, "challenge": q["code_challenge"],
                              "cookie_hash": digest(cookie), "expires": time.time() + 600}
+        consent = self.sign("consent", {"rid": rid, **self.pending[rid]}, 600)
         name = html.escape(c["client_name"])
         collection = "the operator-configured collection / 已配置文献分类"
         body = f'''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Zotero Cloud MCP — Authorize</title></head>
 <body style="font-family:system-ui;max-width:600px;margin:64px auto;padding:24px;line-height:1.7"><h1>Zotero Cloud MCP</h1>
 <p>授权 / Authorize <strong>{name}</strong> 只读访问 / read-only access to <strong>{collection}</strong> 及其子分类 / and descendants.</p>
 <p>不会修改或删除文献。请求的数据将进入你发起的 AI 对话。No library writes; requested metadata is sent to your AI client.</p>
-<form action="/oauth/approve" method="post"><input type="hidden" name="request_id" value="{rid}"><label for="password">插件专用口令 / Instance passphrase</label><br>
+<form action="/oauth/approve" method="post"><input type="hidden" name="request_id" value="{rid}"><input type="hidden" name="consent_token" value="{consent}"><label for="password">插件专用口令 / Instance passphrase</label><br>
 <input id="password" name="password" type="password" autocomplete="current-password" required maxlength="512" style="width:100%;padding:10px;box-sizing:border-box">
 <p>输入 Render 的 MCP_LOGIN_PASSWORD。不是 Google / Zotero 密码，也不是 Zotero API Key。</p>
 <button name="decision" value="allow">确认只读授权 / Approve</button> <button name="decision" value="deny" formnovalidate>取消 / Cancel</button></form>
@@ -214,9 +245,11 @@ class Auth:
         data = await form_data(request)
         rid = data.get("request_id", "")
         cookie_name = self.cookie_name(rid)
+        if rid in self.used_consents:
+            raise OAuthError("access_denied", "authorization_already_submitted", 403)
         p = self.pending.get(rid)
         if not p:
-            raise OAuthError("access_denied", "authorization_state_expired_or_restarted", 403)
+            p = self.recover_consent(rid, data.get("consent_token", ""))
         cookie = request.cookies.get(cookie_name, "")
         if not cookie:
             raise OAuthError("access_denied", "browser_cookie_missing", 403)
@@ -236,6 +269,8 @@ class Auth:
             code = secrets.token_urlsafe(32)
             self.codes[digest(code)] = {**p, "expires": time.time() + 120}
             params = {"code": code, "state": p["state"], "iss": self.s.base_url}
+        # Consume only after a valid browser proof and password (or deny).
+        self.used_consents[rid] = p["expires"]
         response = RedirectResponse(p["redirect_uri"] + ("&" if "?" in p["redirect_uri"] else "?") + urlencode(params), status_code=303)
         response.delete_cookie(cookie_name, path="/", secure=not self.s.local_dev, httponly=True, samesite="lax")
         return response
