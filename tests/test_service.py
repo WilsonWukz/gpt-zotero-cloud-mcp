@@ -97,6 +97,7 @@ class ServiceTests(unittest.TestCase):
         # A normal browser POST from this HTML page must retain its real Origin.
         self.assertEqual(page.headers.get("referrer-policy"), "same-origin")
         rid = re.search(r'name="request_id" value="([^"]+)"', page.text)[1]
+        self.last_consent_token = re.search(r'name="consent_token" value="([^"]+)"', page.text)[1]
         return d, params, rid
 
     def login_code(self, method="client_secret_post"):
@@ -201,6 +202,56 @@ class ServiceTests(unittest.TestCase):
             r = self.c.post("/oauth/approve", data={"request_id": rid, "decision": "allow", "password": PASSWORD},
                             headers={"Origin": self.s.base_url}, follow_redirects=False)
             self.assertEqual(r.status_code, 303, r.text)
+
+    def test_signed_consent_recovers_after_worker_restart(self):
+        _, _, rid = self.begin_login()
+        proof = self.last_consent_token
+        cookie_name = self.auth.cookie_name(rid)
+        cookie = self.c.cookies.get(cookie_name)
+        self.assertTrue(cookie)
+        # New app process: pending authorization state is completely absent.
+        with TestClient(create_app(self.s, httpx.MockTransport(self.up)), base_url=self.s.base_url) as fresh:
+            self.assertNotIn(rid, fresh.app.state.auth.pending)
+            fresh.cookies.set(cookie_name, cookie)
+            result = fresh.post("/oauth/approve", data={
+                "request_id": rid, "consent_token": proof,
+                "decision": "allow", "password": PASSWORD},
+                headers={"Origin": self.s.base_url}, follow_redirects=False)
+            self.assertEqual(result.status_code, 303, result.text)
+            self.assertTrue(result.headers["location"].startswith(CALLBACK + "?"))
+            # The same proof cannot be submitted twice to this worker.
+            fresh.cookies.set(cookie_name, cookie)
+            replay = fresh.post("/oauth/approve", data={
+                "request_id": rid, "consent_token": proof,
+                "decision": "allow", "password": PASSWORD},
+                headers={"Origin": self.s.base_url}, follow_redirects=False)
+            self.assertEqual(replay.status_code, 403)
+            self.assertEqual(replay.json()["error_description"], "authorization_already_submitted")
+
+    def test_signed_consent_recovery_rejects_tampering_missing_cookie_and_expiry(self):
+        _, _, rid = self.begin_login()
+        proof = self.last_consent_token
+        self.auth.pending.pop(rid)
+        valid = {"request_id": rid, "consent_token": proof, "decision": "allow", "password": PASSWORD}
+        tampered = valid.copy()
+        tampered["consent_token"] = proof[:-1] + ("A" if proof[-1] != "A" else "B")
+        bad = self.c.post("/oauth/approve", data=tampered, headers={"Origin": self.s.base_url})
+        self.assertEqual(bad.status_code, 403, bad.text)
+        self.assertEqual(bad.json()["error_description"], "authorization_proof_invalid_or_expired")
+
+        self.c.cookies.clear()
+        missing = self.c.post("/oauth/approve", data=valid, headers={"Origin": self.s.base_url})
+        self.assertEqual(missing.status_code, 403)
+        self.assertEqual(missing.json()["error_description"], "browser_cookie_missing")
+
+        expired_proof = self.auth.sign("consent", {"rid": rid, **{
+            "client_id": self.cid, "redirect_uri": CALLBACK, "state": "test-state",
+            "challenge": "A" * 43, "cookie_hash": "not-a-real-cookie"}},
+            -30)
+        expired = self.c.post("/oauth/approve", data={**valid, "consent_token": expired_proof},
+                              headers={"Origin": self.s.base_url})
+        self.assertEqual(expired.status_code, 403)
+        self.assertEqual(expired.json()["error_description"], "authorization_proof_invalid_or_expired")
 
     def test_explicit_denial(self):
         _, _, rid = self.begin_login()
