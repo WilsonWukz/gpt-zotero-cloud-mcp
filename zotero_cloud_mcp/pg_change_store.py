@@ -12,6 +12,7 @@ import time
 from functools import wraps
 from urllib.parse import urlsplit
 
+import certifi
 import psycopg
 from psycopg.conninfo import conninfo_to_dict
 from psycopg.rows import dict_row
@@ -73,7 +74,7 @@ class PostgresChangeStore:
             opts["sslmode"] = "verify-full"
             # psycopg-binary's bundled libpq may not have ~/.postgresql/root.crt.
             # Use the operating system CA store while validating hostname.
-            opts["sslrootcert"] = "system"
+            opts["sslrootcert"] = certifi.where()
         return psycopg.connect(self.dsn, **opts)
 
     @locked
