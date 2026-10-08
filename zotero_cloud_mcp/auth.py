@@ -22,6 +22,7 @@ CALLBACK = re.compile(r"https://chatgpt\.com/connector/oauth/[A-Za-z0-9_-]+\Z")
 LEGACY_CALLBACK = "https://chatgpt.com/connector_platform_oauth_redirect"
 VERIFIER = re.compile(r"[A-Za-z0-9._~-]{43,128}\Z")
 CHALLENGE = re.compile(r"[A-Za-z0-9_-]{43}\Z")
+REQUEST_ID = re.compile(r"[A-Za-z0-9_-]{43}\Z")
 ACCESS_SECONDS, REFRESH_SECONDS = 28800, 604800
 
 class OAuthError(Exception):
@@ -55,11 +56,18 @@ class Auth:
     def __init__(self, settings: Settings):
         self.s = settings
         self.pending, self.codes, self.limits = {}, {}, {}
-        self.cookie = "zotero-mcp-dev-login" if settings.local_dev else "__Host-zotero-mcp-login"
+        self.cookie_prefix = "zotero-mcp-dev-login" if settings.local_dev else "__Host-zotero-mcp-login"
         # Changing the data scope or any secret revokes access/refresh tokens.
         epoch_data = json.dumps([settings.login_password, settings.zotero_key, settings.collection_name,
                                  settings.collection_key, settings.library_type, settings.library_id])
         self.epoch = hmac.new(settings.app_secret.encode(), epoch_data.encode(), hashlib.sha256).hexdigest()
+
+    def cookie_name(self, request_id):
+        # Every OAuth approval page gets its own host-only cookie, so opening a
+        # second authorization tab cannot overwrite the first tab's proof.
+        if not isinstance(request_id, str) or not REQUEST_ID.fullmatch(request_id):
+            raise OAuthError("access_denied", "authorization_request_missing_or_invalid", 403)
+        return self.cookie_prefix + "-" + request_id[:20]
 
     def require_ready(self):
         if not self.s.auth_ready:
@@ -194,7 +202,7 @@ class Auth:
 <button name="decision" value="allow">确认只读授权 / Approve</button> <button name="decision" value="deny" formnovalidate>取消 / Cancel</button></form>
 <p><small>Return only to {html.escape(redirect)}</small></p></body></html>'''
         response = HTMLResponse(body)
-        response.set_cookie(self.cookie, cookie, max_age=600, secure=not self.s.local_dev, httponly=True, samesite="lax", path="/")
+        response.set_cookie(self.cookie_name(rid), cookie, max_age=600, secure=not self.s.local_dev, httponly=True, samesite="lax", path="/")
         return response
 
     async def approve(self, request):
@@ -204,10 +212,16 @@ class Auth:
             raise OAuthError("access_denied", "Cross-origin approval denied", 403)
         self.prune()
         data = await form_data(request)
-        rid, cookie = data.get("request_id", ""), request.cookies.get(self.cookie, "")
+        rid = data.get("request_id", "")
+        cookie_name = self.cookie_name(rid)
         p = self.pending.get(rid)
-        if not p or not cookie or not hmac.compare_digest(p["cookie_hash"], digest(cookie)):
-            raise OAuthError("access_denied", "Sign-in expired or browser check failed; restart from your MCP client", 403)
+        if not p:
+            raise OAuthError("access_denied", "authorization_state_expired_or_restarted", 403)
+        cookie = request.cookies.get(cookie_name, "")
+        if not cookie:
+            raise OAuthError("access_denied", "browser_cookie_missing", 403)
+        if not hmac.compare_digest(p["cookie_hash"], digest(cookie)):
+            raise OAuthError("access_denied", "browser_cookie_mismatch", 403)
         decision = data.get("decision")
         if decision not in {"allow", "deny"}:
             raise OAuthError("invalid_request", "Explicit allow or deny required")
@@ -223,7 +237,7 @@ class Auth:
             self.codes[digest(code)] = {**p, "expires": time.time() + 120}
             params = {"code": code, "state": p["state"], "iss": self.s.base_url}
         response = RedirectResponse(p["redirect_uri"] + ("&" if "?" in p["redirect_uri"] else "?") + urlencode(params), status_code=303)
-        response.delete_cookie(self.cookie, path="/", secure=not self.s.local_dev, httponly=True, samesite="lax")
+        response.delete_cookie(cookie_name, path="/", secure=not self.s.local_dev, httponly=True, samesite="lax")
         return response
 
     def authenticate_client(self, request, data):
