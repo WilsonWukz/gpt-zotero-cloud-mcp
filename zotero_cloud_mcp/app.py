@@ -74,10 +74,14 @@ class SecurityHeaders:
         if request.method == "OPTIONS" and request.url.path == "/mcp":
             return await Response(status_code=204, headers={"Access-Control-Allow-Origin": origin or self.s.base_url,
                 "Access-Control-Allow-Methods": "POST, GET, OPTIONS", "Access-Control-Allow-Headers": "Authorization, Content-Type, MCP-Protocol-Version", "Vary": "Origin"})(scope, receive, send)
+        # A no-referrer document policy can cause browsers to send Origin: null
+        # on regular same-origin HTML form POSTs. Only the OAuth consent page
+        # needs the same-origin policy; other responses stay no-referrer.
+        referrer_policy = b"same-origin" if request.url.path == "/oauth/authorize" else b"no-referrer"
         async def secured(message):
             if message["type"] == "http.response.start":
                 headers = list(message.get("headers", []))
-                headers.extend([(b"cache-control", b"no-store"), (b"pragma", b"no-cache"), (b"referrer-policy", b"no-referrer"),
+                headers.extend([(b"cache-control", b"no-store"), (b"pragma", b"no-cache"), (b"referrer-policy", referrer_policy),
                     (b"x-content-type-options", b"nosniff"), (b"x-frame-options", b"DENY"),
                     (b"content-security-policy", b"default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")])
                 if self.s.base_url.startswith("https://"):
