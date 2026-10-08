@@ -234,7 +234,9 @@ class ServiceTests(unittest.TestCase):
         self.auth.pending.pop(rid)
         valid = {"request_id": rid, "consent_token": proof, "decision": "allow", "password": PASSWORD}
         tampered = valid.copy()
-        tampered["consent_token"] = proof[:-1] + ("A" if proof[-1] != "A" else "B")
+        header, payload, signature = proof.split(".")
+        tampered["consent_token"] = ".".join((header,
+            ("A" if payload[0] != "A" else "B") + payload[1:], signature))
         bad = self.c.post("/oauth/approve", data=tampered, headers={"Origin": self.s.base_url})
         self.assertEqual(bad.status_code, 403, bad.text)
         self.assertEqual(bad.json()["error_description"], "authorization_proof_invalid_or_expired")
