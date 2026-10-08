@@ -114,7 +114,7 @@ Tests use synthetic data and `httpx.MockTransport`; no live credentials are need
 
 At most 100 collections in the allowed subtree, 5,000 unique references, and 5,000 records per paged resource. Snapshots verify `Total-Results` and a stable `Last-Modified-Version`, and are cleared from memory after 45 seconds. Missing headers, short pages, duplicates, library changes and backoff requests produce explicit errors.
 
-Access tokens last 8 hours. Public clients receive no refresh token. Confidential clients receive a client-bound, fixed-lifetime 7-day refresh token; it is not rotated. Rotating the passphrase revokes access/refresh tokens; rotating `APP_SECRET` also revokes client registrations. In-flight login state is lost on restart. This personal deployment tradeoff is **not appropriate for shared multi-user hosting**; see SECURITY.md.
+Access tokens last 8 hours. Public clients receive no refresh token. Confidential clients receive a client-bound, fixed-lifetime 7-day refresh token; it is not rotated. Rotating the passphrase revokes access/refresh tokens; rotating `APP_SECRET` also revokes client registrations. The signed, 10-minute consent form can recover an in-flight authorization after a worker restart when the browser still holds its bound cookie and the owner passphrase is entered. Once approval creates an authorization code, that code is still held in memory and will be lost on restart; restart authorization in that case. This personal deployment tradeoff is **not appropriate for shared multi-user hosting**; see SECURITY.md.
 
 ## References
 
