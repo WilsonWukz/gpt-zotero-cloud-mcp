@@ -259,13 +259,13 @@ class Auth:
         if decision not in {"allow", "deny"}:
             raise OAuthError("invalid_request", "Explicit allow or deny required")
         if decision == "deny":
-            self.pending.pop(rid)
+            self.pending.pop(rid, None)
             params = {"error": "access_denied", "state": p["state"], "iss": self.s.base_url}
         else:
             password = data.get("password", "")
             if not 32 <= len(password) <= 512 or not hmac.compare_digest(digest(password), digest(self.s.login_password)):
                 raise OAuthError("access_denied", "Incorrect instance passphrase", 401)
-            self.pending.pop(rid)
+            self.pending.pop(rid, None)
             code = secrets.token_urlsafe(32)
             self.codes[digest(code)] = {**p, "expires": time.time() + 120}
             params = {"code": code, "state": p["state"], "iss": self.s.base_url}
