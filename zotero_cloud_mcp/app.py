@@ -78,12 +78,20 @@ class SecurityHeaders:
         # on regular same-origin HTML form POSTs. Only the OAuth consent page
         # needs the same-origin policy; other responses stay no-referrer.
         referrer_policy = b"same-origin" if request.url.path == "/oauth/authorize" else b"no-referrer"
+        # Browsers can apply form-action to the redirect after a form POST.
+        # Only the OAuth consent document needs to permit a ChatGPT callback.
+        # The server still enforces exact registered redirect URIs in auth.py.
+        form_action = b"'self'"
+        if request.url.path == "/oauth/authorize":
+            form_action += b" https://chatgpt.com"
+        csp = (b"default-src 'none'; style-src 'unsafe-inline'; form-action "
+               + form_action + b"; frame-ancestors 'none'; base-uri 'none'")
         async def secured(message):
             if message["type"] == "http.response.start":
                 headers = list(message.get("headers", []))
                 headers.extend([(b"cache-control", b"no-store"), (b"pragma", b"no-cache"), (b"referrer-policy", referrer_policy),
                     (b"x-content-type-options", b"nosniff"), (b"x-frame-options", b"DENY"),
-                    (b"content-security-policy", b"default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")])
+                    (b"content-security-policy", csp)])
                 if self.s.base_url.startswith("https://"):
                     headers.append((b"strict-transport-security", b"max-age=31536000"))
                 if origin in allowed:
