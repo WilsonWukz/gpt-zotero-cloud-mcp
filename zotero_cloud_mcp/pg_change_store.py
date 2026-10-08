@@ -71,6 +71,9 @@ class PostgresChangeStore:
                 "prepare_threshold": None}
         if not self.local:
             opts["sslmode"] = "verify-full"
+            # psycopg-binary's bundled libpq may not have ~/.postgresql/root.crt.
+            # Use the operating system CA store while validating hostname.
+            opts["sslrootcert"] = "system"
         return psycopg.connect(self.dsn, **opts)
 
     @locked
