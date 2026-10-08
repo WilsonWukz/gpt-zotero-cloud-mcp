@@ -49,7 +49,7 @@ python -m zotero_cloud_mcp
 | `ZOTERO_ALLOW_WRITE_KEY` | 默认 `false`，允许有写权限的 Key 时设 `true`。 |
 | `ZOTERO_ENABLE_CONTENT_READS` | 默认 `false`，启用扩展读取；写入模式也会启用这些读工具。 |
 | `ZOTERO_ENABLE_WRITES` | 默认 `false`，开启真实的管理工具。 |
-| `ZOTERO_STATE_DB` | 写入模式必填：独立私人 SQLite 文件的绝对路径，**不是 Zotero 桌面数据库**。 |
+| `ZOTERO_STATE_DB` | 使用持久磁盘时的本地 SQLite 路径，属于可选方案。 |\n| `ZOTERO_DATABASE_URL` | **Neon PostgreSQL 持久操作记录的连接串**，与 SQLite 二选一；仅保存在 Render 私密环境，不放到聊天或 GitHub。 |
 | `ZOTERO_ALLOW_PERMANENT_DELETE` | 默认 `false`，永久删除的独立许可；回收站/恢复不需要它。 |
 | `PUBLIC_BASE_URL` | HTTPS 服务地址，Render 自动使用 `RENDER_EXTERNAL_URL`。 |
 
@@ -64,7 +64,7 @@ ZOTERO_ALLOW_PERMANENT_DELETE=false
 
 数据库文件采用 `0600` 权限。它包含私有元数据、修改前值和结果，不得提交 GitHub。默认保留七天；未解决的执行中/结果不确定记录不自动清除。
 
-**免费/临时文件系统不能当成持久操作记录。** 重新部署可能丢失记录，应为正式写入部署可靠的持久存储。`:memory:` 仅供测试。记录丢失后先检查真实 Zotero 状态，不要盲目重复导入或合并。这次代码提交不会自动配置磁盘、产生付费资源或切换线上权限。
+**免费部署建议：Render Free + Neon Free PostgreSQL。** Render 环境中设置私密 `ZOTERO_DATABASE_URL`、`ZOTERO_ENABLE_WRITES=true`，同时 `ZOTERO_ALLOW_PERMANENT_DELETE=false`，无需本地磁盘挂载；仍须逐项网页批准，并取得 `zotero:write` OAuth 授权。Neon 免费额度有限制，连接使用 SSL/TLS、专用数据库账号；仓库中只提交空模板。\n\n**免费/临时文件系统不能当成持久操作记录。** 重新部署可能丢失记录，应为正式写入部署可靠的持久存储。`:memory:` 仅供测试。记录丢失后先检查真实 Zotero 状态，不要盲目重复导入或合并。这次代码提交不会自动配置磁盘、产生付费资源或切换线上权限。
 
 ## ChatGPT 使用流程
 

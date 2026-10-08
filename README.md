@@ -85,7 +85,7 @@ Set real values only in the hosting environment, never in source, screenshots, i
 | `ZOTERO_ALLOW_WRITE_KEY` | `false`; explicit compatibility opt-in for a key possessing any write privileges. Not a write-tool switch. |
 | `ZOTERO_ENABLE_CONTENT_READS` | `false`; exposes extended metadata, notes, annotations, full-text index and export tools. Also enabled by write mode. |
 | `ZOTERO_ENABLE_WRITES` | `false`; exposes actual management tools and write OAuth scope. Requires the store below. |
-| `ZOTERO_STATE_DB` | Absolute path to the private SQLite change store. Required for write mode; no default. **Not** the Zotero desktop database. |
+| `ZOTERO_STATE_DB` | Private local SQLite path for persistent disk installations (legacy option). |\n| `ZOTERO_DATABASE_URL` | **Alternative to SQLite:** private Neon PostgreSQL URL, with user/password and TLS. Never publish it. Enables a durable write-plan store on Render Free. |
 | `ZOTERO_ALLOW_PERMANENT_DELETE` | `false`; separate opt-in for permanent item deletion. Trash/restore do not require it. |
 | `PUBLIC_BASE_URL` | HTTPS origin; automatically uses `RENDER_EXTERNAL_URL` on Render. |
 | `OAUTH_REDIRECT_URIS` | JSON array of additional exact callbacks. Browser origin/CSP restrictions still apply. |
@@ -100,7 +100,7 @@ ZOTERO_STATE_DB=/var/data/zotero-private/changes.sqlite3
 ZOTERO_ALLOW_PERMANENT_DELETE=false
 ```
 
-An ephemeral/free host can lose its database on redeploy. Use durable storage for reliable history; do not assume the free Blueprint provides it. `:memory:` is for synthetic tests, not an operational audit trail. In-flight/uncertain operations are never silently retried. If the store is lost, inspect Zotero before making a new plan; do not blindly repeat a creation/merge.
+**Render Free + Neon Free:** set `ZOTERO_DATABASE_URL` privately (use a dedicated PostgreSQL role, not a URL in source), leave `ZOTERO_STATE_DB` unset, set `ZOTERO_ENABLE_WRITES=true`, and keep `ZOTERO_ALLOW_PERMANENT_DELETE=false`. PostgreSQL stores the same private plans/receipts persistently across Render restarts; tests run against a disposable local PostgreSQL service in CI. All plan approvals and OAuth write scope remain mandatory. Neon Free has quota limits.\n\nAn ephemeral/free host can lose its local SQLite database on redeploy. Use persistent storage for reliable history; do not assume the free Blueprint provides it. `:memory:` is for synthetic tests, not an operational audit trail. In-flight/uncertain operations are never silently retried. If the store is lost, inspect Zotero before making a new plan; do not blindly repeat a creation/merge.
 
 ## Upgrade and connect
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — Neon PostgreSQL persistence
+
+- Add optional `ZOTERO_DATABASE_URL` change-plan backend for Neon PostgreSQL while retaining SQLite for local deployments.
+- Enforce transactional PostgreSQL one-shot claims, plan digests, durable receipts and cross-process concurrency protection.
+- Add integration tests with disposable PostgreSQL on Python 3.12/3.13 CI; support Render Free + Neon Free without paid disks.
+
+
 ## 0.2.0 — reviewed library management (experimental, no release tag)
 
 - Implement actual version-guarded Zotero library writes: collections, bibliographic JSON import, metadata, creator roles, tags, memberships, notes/annotations, conservative duplicate merges, trash/restore, and separately gated permanent deletion.
