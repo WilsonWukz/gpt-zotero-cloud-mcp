@@ -17,6 +17,8 @@ class Settings:
     collection_key: str = ""
     library_type: str = "user"
     library_id: str = ""
+    # Explicit operator opt-in; never adds write tools or non-GET upstream calls.
+    allow_write_key: bool = False
     extra_redirects: tuple[str, ...] = ()
     local_dev: bool = False
 
@@ -34,6 +36,7 @@ class Settings:
             collection_key=os.getenv("ZOTERO_COLLECTION_KEY", ""),
             library_type=os.getenv("ZOTERO_LIBRARY_TYPE", "user"),
             library_id=os.getenv("ZOTERO_LIBRARY_ID", ""),
+            allow_write_key=os.getenv("ZOTERO_ALLOW_WRITE_KEY", "false").strip().lower() == "true",
             extra_redirects=tuple(redirects),
             local_dev=os.getenv("LOCAL_DEV", "false").lower() == "true",
         )

@@ -51,7 +51,7 @@ class Zotero:
 
     async def get(self, path, params=None):
         if not self.s.data_ready:
-            raise DataError("SETUP_REQUIRED", "Configure a read-only ZOTERO_API_KEY and an allowed collection in server environment.")
+            raise DataError("SETUP_REQUIRED", "Configure ZOTERO_API_KEY with read access and an allowed collection in server environment.")
         if not re.fullmatch(r"/(?:keys/current|(?:users|groups)/[0-9]+/collections(?:/[A-Z0-9]{8}/items/top)?)", path):
             raise DataError("INVALID_PATH", "Endpoint not permitted")
         remaining = self.not_before - time.monotonic()
@@ -143,8 +143,10 @@ class Zotero:
         if not isinstance(info, dict) or not isinstance(info.get("access"), dict):
             raise DataError("INVALID_KEY_METADATA", "Cannot verify API-key privileges")
         access = info["access"]
-        if has_write_access(access):
-            raise DataError("KEY_MUST_BE_READ_ONLY", "Use a dedicated key without any personal or group write permissions")
+        key_can_write = has_write_access(access)
+        if key_can_write and not self.s.allow_write_key:
+            raise DataError("KEY_MUST_BE_READ_ONLY",
+                            "Write-capable key detected. Prefer a read-only key, or explicitly set ZOTERO_ALLOW_WRITE_KEY=true in server environment. MCP tools remain read-only.")
         if self.s.library_type == "user":
             uid = str(info.get("userID", ""))
             if not uid.isascii() or not uid.isdecimal() or not access.get("user", {}).get("library"):
@@ -191,7 +193,7 @@ class Zotero:
                 raise DataError("SCOPE_TOO_LARGE", "Limit is 5,000 unique references")
         version = next(iter(versions))
         return {"root": root, "collections": scoped, "items": items, "memberships": memberships,
-                "library_version": version, "snapshot_id": hashlib.sha256((prefix + root + version).encode()).hexdigest()[:24],
+                "key_has_write_access": key_can_write, "library_version": version, "snapshot_id": hashlib.sha256((prefix + root + version).encode()).hexdigest()[:24],
                 "retrieved_at": datetime.now(timezone.utc).isoformat(), "complete": True}
 
     async def invoke(self, name, args):
@@ -202,7 +204,11 @@ class Zotero:
         if args.get("snapshot_id") and args["snapshot_id"] != snap["snapshot_id"]:
             raise DataError("SNAPSHOT_CHANGED", "Previous snapshot is no longer current; restart at start=0")
         if name == "zotero_status":
-            return {**ctx, "configured": True, "connected": True, "read_only_key_verified": True, "scope_root": snap["root"], "unique_references": len(snap["items"]), "complete": True}
+            return {**ctx, "configured": True, "connected": True,
+                    "read_only_operations": True,
+                    "read_only_key_verified": not snap["key_has_write_access"],
+                    "upstream_key_has_write_access": snap["key_has_write_access"],
+                    "scope_root": snap["root"], "unique_references": len(snap["items"]), "complete": True}
         if name == "list_collections":
             return {**ctx, "collections": snap["collections"], "complete": True}
         if name == "get_item":

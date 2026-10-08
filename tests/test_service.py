@@ -2,6 +2,8 @@
 import base64
 from dataclasses import replace
 import hashlib
+import os
+from unittest.mock import patch
 import json
 import re
 import time
@@ -33,6 +35,7 @@ class Upstream:
         self.rows = {ROOT: [item(i) for i in range(205)], CHILD: [item(0), item(900, [CHILD])]}
         self.requests = []
         self.write = self.short = self.missing = self.changed = self.duplicate = self.group = self.backoff = False
+        self.library_read = True
         self.status = 200
         self.secret_echo = ""
 
@@ -45,7 +48,7 @@ class Upstream:
         if self.status != 200:
             return httpx.Response(self.status, text=self.secret_echo, headers={"Retry-After": "3"})
         if r.url.path == "/keys/current":
-            return httpx.Response(200, json={"userID": 12345, "access": {"user": {"library": True, "write": self.write}, "groups": {"54321": {"library": self.group, "write": False}}}})
+            return httpx.Response(200, json={"userID": 12345, "access": {"user": {"library": self.library_read, "write": self.write}, "groups": {"54321": {"library": self.group, "write": False}}}})
         start = int(r.url.params.get("start", 0))
         rows = self.collections if r.url.path.endswith("/collections") else self.rows.get(r.url.path.split("/")[-3], [])
         batch = rows[start:start + 100]
@@ -338,10 +341,63 @@ class ServiceTests(unittest.TestCase):
         self.up.collections.append(collection("DUPE0001", "Example Collection"))
         self.assertEqual(self.payload("list_collections")["error"], "COLLECTION_NOT_UNIQUE")
 
-    def test_write_privileged_key_rejected(self):
+    def test_write_privileged_key_rejected_without_explicit_opt_in(self):
         self.up.write = True
-        self.assertEqual(self.payload("zotero_status")["error"], "KEY_MUST_BE_READ_ONLY")
+        result = self.payload("zotero_status")
+        self.assertEqual(result["error"], "KEY_MUST_BE_READ_ONLY")
+        self.assertFalse(result["complete"])
         self.assertEqual(len(self.up.requests), 1)
+
+    def test_explicit_opt_in_allows_write_capable_key_without_any_write_operations(self):
+        self.up.write = True
+        settings = replace(self.s, allow_write_key=True)
+        with TestClient(create_app(settings, httpx.MockTransport(self.up)), base_url=settings.base_url) as c:
+            auth = c.app.state.auth
+            cid = auth.sign("client", self.meta)
+            token = auth.issue_tokens(cid, self.meta)["access_token"]
+            headers = {"Authorization": "Bearer " + token, "Accept": "application/json, text/event-stream"}
+            calls = [("zotero_status", {}), ("list_collections", {}), ("list_items", {"limit": 10}),
+                     ("get_item", {"item_key": "I0000001"}),
+                     ("check_references", {"references": [{"title": "Synthetic reference 1"}]})]
+            for name, args in calls:
+                res = c.post("/mcp", headers=headers, json={"jsonrpc": "2.0", "id": 1,
+                             "method": "tools/call", "params": {"name": name, "arguments": args}})
+                self.assertEqual(res.status_code, 200, res.text)
+                self.assertFalse(res.json()["result"]["isError"], (name, res.text))
+                data = res.json()["result"]["structuredContent"]
+                if name == "zotero_status":
+                    self.assertTrue(data["read_only_operations"])
+                    self.assertTrue(data["upstream_key_has_write_access"])
+                    self.assertFalse(data["read_only_key_verified"])
+                    self.assertEqual(data["unique_references"], 206)
+            tools = c.post("/mcp", headers=headers, json={"jsonrpc": "2.0", "id": 2,
+                           "method": "tools/list"}).json()["result"]["tools"]
+            self.assertEqual(len(tools), 5)
+            self.assertTrue(all(x["annotations"]["readOnlyHint"] for x in tools))
+            self.assertTrue(all(x["annotations"]["destructiveHint"] is False for x in tools))
+        self.assertGreater(len(self.up.requests), 1)
+        self.assertTrue(all(req.method == "GET" and req.url.host == "api.zotero.org" for req in self.up.requests))
+
+    def test_opt_in_does_not_bypass_missing_read_permission(self):
+        self.up.write = True
+        self.up.library_read = False
+        settings = replace(self.s, allow_write_key=True)
+        with TestClient(create_app(settings, httpx.MockTransport(self.up)), base_url=settings.base_url) as c:
+            auth = c.app.state.auth
+            cid = auth.sign("client", self.meta)
+            token = auth.issue_tokens(cid, self.meta)["access_token"]
+            res = c.post("/mcp", headers={"Authorization": "Bearer " + token,
+                           "Accept": "application/json, text/event-stream"}, json={
+                           "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                           "params": {"name": "zotero_status", "arguments": {}}})
+            self.assertTrue(res.json()["result"]["isError"])
+            self.assertEqual(res.json()["result"]["structuredContent"]["error"], "LIBRARY_ACCESS_DENIED")
+
+    def test_write_key_opt_in_env_requires_literal_true(self):
+        for value, expected in (("false", False), ("TRUE", True), (" true ", True),
+                                ("1", False), ("yes", False), ("", False)):
+            with patch.dict(os.environ, {"ZOTERO_ALLOW_WRITE_KEY": value}):
+                self.assertIs(Settings.from_env().allow_write_key, expected)
 
     def test_upstream_errors_do_not_leak_body(self):
         self.up.status, self.up.secret_echo = 403, self.s.zotero_key
