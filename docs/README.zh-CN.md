@@ -16,10 +16,11 @@
 | --- | --- |
 | `APP_SECRET` | 至少 32 字符的随机签名密钥。 |
 | `MCP_LOGIN_PASSWORD` | 另一个至少 32 字符的随机口令，仅在插件授权网页输入。 |
-| `ZOTERO_API_KEY` | 专用只读 Zotero 密钥，不勾选任何个人库或群组写权限。 |
+| `ZOTERO_API_KEY` | 对目标文献库有**读取权限**的 Zotero Key，推荐专用只读密钥。 |
+| `ZOTERO_ALLOW_WRITE_KEY` | 可选，默认 `false`。若需复用具有写权限的 Key，在 Render 私密 Environment 里显式设为 `true`；**不会开放写入工具**。 |
 | `ZOTERO_COLLECTION_NAME` | 希望开放给插件读取的分类准确名称。 |
 
-Blueprint 会在 Render 内生成前两个值。直接创建服务则通过 Environment 配置。不要在聊天里发送密钥，不要把三种密钥混用。Zotero 密钥在 https://www.zotero.org/settings/keys 创建。分类重名时以 `ZOTERO_COLLECTION_KEY` 指定准确分类；仅返回它及其子分类。个人库 ID 可以自动识别，群组库需要额外设置 `ZOTERO_LIBRARY_TYPE=group` 和 `ZOTERO_LIBRARY_ID`。
+Blueprint 会在 Render 内生成前两个值。直接创建服务则通过 Environment 配置。带写权限的 Key 默认被拒绝并返回 `KEY_MUST_BE_READ_ONLY`，只有启用 `ZOTERO_ALLOW_WRITE_KEY=true` 才允许其用于读取。**这仅改变密钥兼容性，所有上游 Zotero 请求仍固定为 GET，ChatGPT 无法调用修改/删除工具。** 但若全权限 Key 本身泄露，攻击者仍可绕过此插件直接修改或删除文献，因此其他使用者更应使用最小权限密钥。不要在聊天里发送密钥，不要把三种密钥混用。Zotero 密钥在 https://www.zotero.org/settings/keys 创建。分类重名时以 `ZOTERO_COLLECTION_KEY` 指定准确分类；仅返回它及其子分类。个人库 ID 可以自动识别，群组库需要额外设置 `ZOTERO_LIBRARY_TYPE=group` 和 `ZOTERO_LIBRARY_ID`。
 
 ## 连接 ChatGPT
 
@@ -39,6 +40,6 @@ Blueprint 会在 Render 内生成前两个值。直接创建服务则通过 Envi
 
 ## 后续开源
 
-先保持仓库私有。公开前执行 `docs/RELEASING.md`：审核完整 Git 历史、许可证、依赖、安全报告入口及真实联调记录。源码提供 MIT 许可证，第一次公开前确认采用它。
+即使仓库已公开，私有密钥、服务登录口令及文献内容都不能公开。向其他人推广/正式发布前请执行 `docs/RELEASING.md`：审核完整 Git 历史、许可证、依赖、安全报告入口及真实联调记录。当前源代码采用 MIT 许可证；对外正式发布前再次核实。
 
 这是实验性 v0.1.0，尚无独立安全审计。离线测试使用假数据，不等于已连通真实 Zotero 或已完成 ChatGPT 授权。单实例只服务一个所有者，不应直接改成多人共用网站。详细限制见 SECURITY.md。

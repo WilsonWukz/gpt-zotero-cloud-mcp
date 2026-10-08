@@ -4,9 +4,9 @@
 
 ## Enforced boundaries
 
-All MCP operations require authorization before tool discovery or execution. The model cannot choose account IDs, keys, hosts or arbitrary API paths. Upstream traffic uses only GET to `https://api.zotero.org`; redirects and environment proxies are disabled. Keys with any write privilege are rejected. Only a configured collection subtree is returned; unrelated collection names, notes and attachments are not returned. Public pages do not display the configured collection name.
+All MCP operations require authorization before tool discovery or execution. The model cannot choose account IDs, keys, hosts or arbitrary API paths. Upstream traffic uses only GET to `https://api.zotero.org`; redirects and environment proxies are disabled. Write-privileged keys are **rejected by default**. A self-hosting owner may explicitly set `ZOTERO_ALLOW_WRITE_KEY=true` to permit such an upstream key for **read-only gateway operations**; this flag cannot enable POST/PUT/PATCH/DELETE to Zotero or create any MCP write tool. Only a configured collection subtree is returned; unrelated collection names, notes and attachments are not returned. Public pages do not display the configured collection name.
 
-The server temporarily reads collection metadata to resolve the permitted subtree. Zotero key permissions may still grant whole-library access: compromise of the upstream key bypasses our application-level subtree restriction. Use a dedicated, least-privileged key and keep it private.
+The server temporarily reads collection metadata to resolve the permitted subtree. Zotero key permissions may still grant whole-library access: compromise of the upstream key bypasses our application-level subtree restriction. Use a dedicated, least-privileged key and keep it private. **Risk of opt-in:** if a write-capable upstream key leaks, a third party can bypass this gateway and use Zotero's API to modify/delete data, even though the gateway itself is read-only. This is why `ZOTERO_ALLOW_WRITE_KEY` defaults to false. A compromise of the host/environment could expose the stored secret.
 
 ## OAuth
 

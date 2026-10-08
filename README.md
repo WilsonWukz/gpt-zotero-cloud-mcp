@@ -8,13 +8,13 @@ A self-hosted, **read-only** bridge between Zotero's cloud library and MCP clien
 
 | Tool | Purpose |
 | --- | --- |
-| `zotero_status` | Verify cloud access, read-only privileges and a complete scoped snapshot. |
+| `zotero_status` | Verify cloud access and a complete scoped snapshot; report upstream key privileges separately from read-only MCP operations. |
 | `list_collections` | Return only the configured root collection and its descendants. |
 | `list_items` | Search/list references with recursive deduplication and explicit pagination. |
 | `get_item` | Retrieve an in-scope reference's metadata and abstract. |
 | `check_references` | Compare an explicit list by normalized DOI/title; flag ambiguity and conflicts. |
 
-There are **no import, edit, delete, PDF-download or note-reading tools**. A complete API snapshot is not the same as a complete bibliography. PDF availability remains `not_checked` in this release.
+There are **no import, edit, delete, PDF-download or note-reading tools**, even if you opt in to a write-capable upstream key. A complete API snapshot is not the same as a complete bibliography. PDF availability remains `not_checked` in this release.
 
 ## Design
 
@@ -26,7 +26,7 @@ MCP client -- OAuth code + S256 PKCE --> this instance /mcp
                                      api.zotero.org v3
 ```
 
-This is a **single-owner, single-worker** service, not a multi-user SaaS. The MCP gateway uses a dedicated instance passphrase; a separate Zotero read-only API key is stored in the hosting environment. Neither the upstream key nor the passphrase is inserted into OAuth tokens or tool results.
+This is a **single-owner, single-worker** service, not a multi-user SaaS. The MCP gateway uses a dedicated instance passphrase; a separate Zotero API key (preferably read-only) is stored in the hosting environment. Neither the upstream key nor the passphrase is inserted into OAuth tokens or tool results.
 
 The transport implements a small stateless MCP Streamable HTTP JSON-response tool subset for versions `2025-03-26`, `2025-06-18`, and `2025-11-25`. It is not based on an official MCP SDK and does not claim full protocol conformance certification. SSE sessions, legacy HTTP+SSE, stdio, sampling and filesystem access are not implemented. Real ChatGPT interoperability must be tested separately from offline tests.
 
@@ -55,7 +55,8 @@ Real values belong only in the host's private environment settings, not the repo
 | --- | --- |
 | `APP_SECRET` | Independently generated random signing secret, at least 32 characters. |
 | `MCP_LOGIN_PASSWORD` | A different random passphrase, at least 32 characters. Enter only on your instance's consent page. |
-| `ZOTERO_API_KEY` | A dedicated key with library **read** permission and no personal/group write privileges. |
+| `ZOTERO_API_KEY` | Zotero API key with **read** permission for the selected personal/group library. Prefer a separate read-only key. |
+| `ZOTERO_ALLOW_WRITE_KEY` | **Optional; defaults to `false`.** Set literal `true` in your private host environment to opt in to a write-capable Zotero API key. It does **not** enable MCP writes. |
 | `ZOTERO_COLLECTION_NAME` | Exact allowed root collection name; source code has no default collection. |
 | `ZOTERO_COLLECTION_KEY` | Optional exact 8-character key; overrides the name, resolving duplicate names. |
 | `ZOTERO_LIBRARY_TYPE` | `user` by default; `group` for a group library. |
@@ -66,7 +67,7 @@ Real values belong only in the host's private environment settings, not the repo
 
 Blueprint deployment generates `APP_SECRET` and `MCP_LOGIN_PASSWORD` inside Render. Direct creation must supply them through Environment. A secret's length is not proof of entropy; use a password manager or `secrets.token_urlsafe(32)`, and use different values.
 
-Create a Zotero key at https://www.zotero.org/settings/keys . This implementation rejects keys with *any* write privilege. Collection isolation is enforced in this service, not a replacement for Zotero's account/library-level key permissions.
+Create a Zotero key at https://www.zotero.org/settings/keys . The secure default rejects keys with **any** personal/group write privilege (`KEY_MUST_BE_READ_ONLY`). To reuse a write-capable key, explicitly set `ZOTERO_ALLOW_WRITE_KEY=true` in your **private Render Environment**. A successful `zotero_status` then reports `read_only_operations: true`, `upstream_key_has_write_access: true`, and `read_only_key_verified: false`. The same five read-only tools, fixed Zotero hostname, GET-only upstream requests, and configured collection subtree restriction remain in place. **Risk:** a leaked write-capable key can still modify or delete Zotero data through other clients or direct Zotero API access. Therefore a dedicated read-only key is strongly recommended for general deployments. Collection isolation is enforced by the gateway, not by Zotero's upstream key permissions.
 
 The service starts safely without credentials: `/healthz` reports the process, `/readyz` reports configuration, and private access stays closed. **Only authenticated `zotero_status` verifies the real Zotero connection.**
 
@@ -107,7 +108,8 @@ Tests use synthetic data and `httpx.MockTransport`; no live credentials are need
 - `auth.py`: bounded single-owner OAuth gateway.
 - `zotero.py`: scoped cloud client, snapshot integrity and reference matching.
 - `app.py`: MCP tool schemas, routes and security headers.
-- `tests/test_service.py`: offline security, protocol and data-integrity checks.
+- `tests/test_service.py`: offline security, protocol, data-integrity and privileged-key opt-in checks.
+- `tests/test_oauth_csp.py`: OAuth callback/CSP regression tests.
 - `render.yaml`: repeatable free-tier deployment configuration.
 
 ## Explicit limits
