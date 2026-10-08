@@ -174,6 +174,34 @@ class ServiceTests(unittest.TestCase):
         self.c.cookies.clear()
         self.assertEqual(self.c.post("/oauth/approve", data=d).status_code, 403)
 
+    def test_login_rejections_distinguish_session_and_cookie_failures(self):
+        _, _, expired = self.begin_login()
+        self.auth.pending.pop(expired)
+        data = {"request_id": expired, "decision": "allow", "password": PASSWORD}
+        r = self.c.post("/oauth/approve", data=data, headers={"Origin": self.s.base_url})
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(r.json()["error_description"], "authorization_state_expired_or_restarted")
+
+        _, _, rid = self.begin_login()
+        data["request_id"] = rid
+        self.c.cookies.clear()
+        r = self.c.post("/oauth/approve", data=data, headers={"Origin": self.s.base_url})
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(r.json()["error_description"], "browser_cookie_missing")
+        self.c.cookies.set(self.auth.cookie_name(rid), "invalid_cookie_proof")
+        r = self.c.post("/oauth/approve", data=data, headers={"Origin": self.s.base_url})
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(r.json()["error_description"], "browser_cookie_mismatch")
+
+    def test_parallel_login_tabs_do_not_overwrite_each_other(self):
+        _, _, first = self.begin_login()
+        _, _, second = self.begin_login()
+        self.assertNotEqual(first, second)
+        for rid in (first, second):
+            r = self.c.post("/oauth/approve", data={"request_id": rid, "decision": "allow", "password": PASSWORD},
+                            headers={"Origin": self.s.base_url}, follow_redirects=False)
+            self.assertEqual(r.status_code, 303, r.text)
+
     def test_explicit_denial(self):
         _, _, rid = self.begin_login()
         r = self.c.post("/oauth/approve", data={"request_id": rid, "decision": "deny"}, follow_redirects=False)
