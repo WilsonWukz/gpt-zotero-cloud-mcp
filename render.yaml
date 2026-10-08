@@ -1,0 +1,25 @@
+# yaml-language-server: $schema=https://render.com/schema/render.yaml.json
+services:
+  - type: web
+    name: zotero-cloud-mcp
+    runtime: python
+    plan: free
+    region: singapore
+    buildCommand: pip install -r requirements.txt && python -m unittest discover -s tests -q
+    startCommand: python -m zotero_cloud_mcp
+    healthCheckPath: /healthz
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.5
+      - key: APP_SECRET
+        generateValue: true
+      - key: MCP_LOGIN_PASSWORD
+        generateValue: true
+      - key: ZOTERO_API_KEY
+        sync: false
+      - key: ZOTERO_COLLECTION_NAME
+        sync: false
+      - key: ZOTERO_LIBRARY_TYPE
+        value: user
+      - key: LOCAL_DEV
+        value: "false"

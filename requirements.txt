@@ -1,0 +1,4 @@
+starlette==0.50.0
+httpx==0.28.1
+PyJWT==2.13.0
+uvicorn==0.48.0
