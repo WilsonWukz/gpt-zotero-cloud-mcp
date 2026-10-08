@@ -67,7 +67,10 @@ class SecurityHeaders:
         allowed = {self.s.base_url, "https://chatgpt.com"}
         bad_host = request.headers.get("host", "") != urlsplit(self.s.base_url).netloc and request.url.path not in {"/healthz", "/readyz"}
         if bad_host or origin and origin not in allowed:
-            return await JSONResponse({"error": "forbidden_origin_or_host"}, 403)(scope, receive, send)
+            # Deliberately do not echo request headers (or credentials) in errors.
+            # Distinguish proxy host issues from browser-origin rejection without weakening CSRF defenses.
+            reason = "host_mismatch" if bad_host else "origin_mismatch"
+            return await JSONResponse({"error": "forbidden_origin_or_host", "reason": reason}, 403)(scope, receive, send)
         if request.method == "OPTIONS" and request.url.path == "/mcp":
             return await Response(status_code=204, headers={"Access-Control-Allow-Origin": origin or self.s.base_url,
                 "Access-Control-Allow-Methods": "POST, GET, OPTIONS", "Access-Control-Allow-Headers": "Authorization, Content-Type, MCP-Protocol-Version", "Vary": "Origin"})(scope, receive, send)
