@@ -14,7 +14,7 @@ Authorization code with mandatory S256 PKCE, exact registered redirects, explici
 
 Access: 8 hours. Confidential-client refresh: 7-day **absolute** lifetime, requiring the registered client's secret. No public-client refresh tokens. Confidential refresh tokens are not rotated and there is no per-token revocation database; these are explicit personal-use limitations. Rotate `MCP_LOGIN_PASSWORD` to revoke all access/refresh tokens. Changing data credentials or scope also revokes them. Rotate `APP_SECRET` to revoke registrations too.
 
-Pending sign-ins expire after 10 minutes; codes expire after 2 minutes and are consumed once. Expired state is pruned on OAuth requests. Restart drops all pending state; consumed codes cannot be replayed after restart. **Do not increase worker/process count.** Global in-memory rate limits reset on restart and are not distributed abuse protection. Provider-level limits are recommended.
+Pending sign-ins expire after 10 minutes; codes expire after 2 minutes and are consumed once. Expired state is pruned on OAuth requests. A signed, 10-minute browser-bound consent proof can recover pending authorization after a worker restart. Consent replay is blocked only within the active worker; across restarts a still-valid consent proof can be submitted again only with its browser cookie and the owner passphrase. Already-issued authorization codes remain in memory and are invalidated by a restart; redeemed codes cannot be replayed across restarts. This is an experimental single-owner tradeoff, not a durable distributed OAuth state store. **Do not increase worker/process count.** Global in-memory rate limits reset on restart and are not distributed abuse protection. Provider-level limits are recommended.
 
 ## Secrets, data and logs
 
