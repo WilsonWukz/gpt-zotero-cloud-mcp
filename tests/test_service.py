@@ -94,6 +94,8 @@ class ServiceTests(unittest.TestCase):
                   "code_challenge": challenge, "code_challenge_method": "S256"}
         page = self.c.get("/oauth/authorize", params=params)
         self.assertEqual(page.status_code, 200, page.text)
+        # A normal browser POST from this HTML page must retain its real Origin.
+        self.assertEqual(page.headers.get("referrer-policy"), "same-origin")
         rid = re.search(r'name="request_id" value="([^"]+)"', page.text)[1]
         return d, params, rid
 
@@ -157,12 +159,18 @@ class ServiceTests(unittest.TestCase):
         _, p, _ = self.begin_login()
         self.assertEqual(self.c.get("/oauth/authorize", params={**p, "redirect_uri": "https://chatgpt.com/connector/oauth/different"}).status_code, 400)
 
+    def test_referrer_policy_only_relaxed_on_oauth_authorize(self):
+        self.assertEqual(self.c.get("/healthz").headers.get("referrer-policy"), "no-referrer")
+        self.assertEqual(self.c.get("/readyz").headers.get("referrer-policy"), "no-referrer")
+        self.assertEqual(self.c.get("/privacy").headers.get("referrer-policy"), "no-referrer")
+
     def test_approval_requires_password_cookie_origin(self):
         _, _, rid = self.begin_login()
         d = {"request_id": rid, "decision": "allow", "password": "wrong"}
         self.assertEqual(self.c.post("/oauth/approve", data=d).status_code, 401)
         d["password"] = PASSWORD
         self.assertEqual(self.c.post("/oauth/approve", data=d, headers={"Origin": "https://attacker.example"}).status_code, 403)
+        self.assertEqual(self.c.post("/oauth/approve", data=d, headers={"Origin": "null"}).status_code, 403)
         self.c.cookies.clear()
         self.assertEqual(self.c.post("/oauth/approve", data=d).status_code, 403)
 
